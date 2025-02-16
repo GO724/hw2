@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"sync"
-	"time"
 )
 
 // task:
@@ -84,14 +83,6 @@ func RunPipeline(cmds ...cmd) {
 				close(ch[i])
 			}()
 			continue
-
-		// case len(cmds):
-		// 	wg.Add(1)
-		// 	go func() {
-		// 		defer wg.Done()
-		// 		cmd(in, ch[i])
-		// 	}()
-		// 	continue
 
 		default:
 			wg.Add(1)
@@ -251,11 +242,7 @@ func CheckSpam(in, out chan interface{}) {
 
 	}
 
-	go func() {
-		wg.Wait()
-		close(out)
-		fmt.Println("CheckSpam.close(out)")
-	}()
+	wg.Wait()
 
 }
 
@@ -301,8 +288,6 @@ func CombineResults(in, out chan interface{}) {
 			panic(err)
 		}
 
-		// fmt.Println("CombineResults.read: ", msgData.ID, msgData.HasSpam)
-
 		result = append(result, msgData)
 	}
 
@@ -316,27 +301,10 @@ func CombineResults(in, out chan interface{}) {
 		return a.ID < b.ID
 	})
 
-	// wg := new(sync.WaitGroup)
-
-	// fmt.Println("CombineResults.out.Slice...")
-
-	outSlice := make([]string, 0, len(result))
-
 	for _, msgData := range result {
-		// line := fmt.Sprintf("%5t %d\n", msgData.HasSpam, msgData.ID)
-		line := fmt.Sprintf("%5t %d", msgData.HasSpam, msgData.ID)
-		outSlice = append(outSlice, line)
-		fmt.Println("OUT:", line)
-		// wg.Add(1)
-		// go func(l string) {
-		// defer wg.Done()
-		// out <- line
-		//  }(line)
+		out <- fmt.Sprintf("%t %d", msgData.HasSpam, msgData.ID)
 	}
 
-	out <- outSlice
-
-	// wg.Wait()
 }
 
 func iString(i interface{}) (string, error) {
@@ -372,88 +340,5 @@ func iMsgData(i interface{}) (MsgData, error) {
 		return v, nil
 	default:
 		return MsgData{}, fmt.Errorf("неожиданный тип: %T", v)
-	}
-}
-
-// func main() {
-// 	inputData := []string{
-// 		"harry.dubois@mail.ru",
-// 		"k.kitsuragi@mail.ru",
-// 		"d.vader@mail.ru",
-// 		"noname@mail.ru",
-// 		"e.musk@mail.ru",
-// 		"spiderman@mail.ru", // is an alias for peter.parker@mail.ru
-// 		"red_prince@mail.ru",
-// 		"tomasangelo@mail.ru",
-// 		"batman@mail.ru", // is an alias for bruce.wayne@mail.ru
-// 		"bruce.wayne@mail.ru",
-// 	}
-
-// 	timeStart := time.Now()
-
-// 	inGenerator := make(chan interface{})
-// 	outGenerator := make(chan interface{})
-
-// 	wg := new(sync.WaitGroup)
-
-// 	wg.Add(1)
-// 	go func(cmd cmd, in, out chan interface{}) {
-// 		cmd(in, out)
-// 		defer wg.Done()
-// 	}(new2CatStrings(inputData, time.Second), inGenerator, outGenerator)
-
-// 	go func() {
-// 		wg.Wait()
-// 		fmt.Println("stop generator: new2CatStrings.close(out)")
-// 		close(outGenerator)
-// 	}()
-
-// 	outSelectUsers := make(chan interface{})
-// 	go SelectUsers(outGenerator, outSelectUsers)
-// 	// readCh(outSelectUsers, 0)
-
-// 	outSelectMessages := make(chan interface{})
-// 	go SelectMessages(outSelectUsers, outSelectMessages)
-// 	// readCh(outSelectMessages, 0)
-
-// 	outCheckSpam := make(chan interface{})
-// 	go CheckSpam(outSelectMessages, outCheckSpam)
-// 	// readCh(outCheckSpam, 0)
-
-// 	outCombineResults := make(chan interface{})
-// 	CombineResults(outCheckSpam, outCombineResults)
-// 	// readCh(outCombineResults, 0)
-
-// 	timeEnd := time.Since(timeStart)
-// 	fmt.Println(timeEnd)
-
-// }
-
-// func readCh(in chan interface{}, delayMillisecond int) {
-// 	fmt.Println("\t***** read ch started *****")
-// 	for i := range in {
-// 		if delayMillisecond != 0 {
-// 			time.Sleep(time.Duration(delayMillisecond) * time.Millisecond)
-// 		}
-// 		switch v := i.(type) {
-// 		default:
-// 			fmt.Printf("\treadCh : %T %v\n", v, v)
-// 			// fmt.Printf("\t%s\n", v)
-// 		}
-// 	}
-
-// 	fmt.Println("\t***** read ch done *****")
-// }
-
-// инициализация джобы, которая просто выплюнет в out подряд все из слайса строк strs
-func new2CatStrings(strs []string, pauses time.Duration) func(in, out chan interface{}) {
-	return func(in, out chan interface{}) {
-		fmt.Println("start generator")
-		for _, email := range strs {
-			out <- email
-			if pauses != 0 {
-				time.Sleep(pauses)
-			}
-		}
 	}
 }
