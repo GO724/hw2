@@ -24,11 +24,13 @@ func TestPipeline(t *testing.T) {
 	var recieved uint32
 	freeFlowCmds := []cmd{
 		cmd(func(in, out chan interface{}) {
-			fmt.Println("1: freeFlowCmd.Write(out) <- 1")
+			// fmt.Println("1: freeFlowCmd.Write(out) <- 1")
 			out <- 1
 			time.Sleep(10 * time.Millisecond)
+
 			currRecieved := atomic.LoadUint32(&recieved)
-			fmt.Println("1: freeFlowCmd currRecieved ", currRecieved)
+			// fmt.Println("1: freeFlowCmd currRecieved ", currRecieved)
+
 			// в чем тут суть
 			// если вы накапливаете значения, то пока вся функция не отработает - дальше они не пойдут
 			// тут я проверяю, что счетчик увеличился в следующей функции
@@ -38,9 +40,10 @@ func TestPipeline(t *testing.T) {
 			}
 		}),
 		cmd(func(in, out chan interface{}) {
-			fmt.Println("2: freeFlowCmd.Out.start read from chan in")
+			// fmt.Println("2: freeFlowCmd.Out.start read from chan in")
+
 			for range in {
-				fmt.Println("2: freeFlowCmd.Read(in) currRecieved", &recieved)
+				// fmt.Println("2: freeFlowCmd.Read(in) currRecieved", &recieved)
 				atomic.AddUint32(&recieved, 1)
 			}
 		}),
@@ -108,6 +111,10 @@ func newCatStrings(strs []string, pauses time.Duration) func(in, out chan interf
 		}
 	}
 }
+
+// func NewCatStrings(strs []string, pauses time.Duration) func(in, out chan interface{}) {
+// 	return newCatStrings(strs, pauses)
+// }
 
 // инициализация джобы, которая считает из in все строки, пока канал не закроется. и положит все в strs
 func newCollectStrings(strs *[]string) func(in, out chan interface{}) {

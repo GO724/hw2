@@ -67,84 +67,42 @@ import (
 //     но в тестах округлил до 3секунд, чтоб сгладить погрешности рандома и самих вычислений. при этом обращаю внимание,
 //     что абсолютно верный код при запуске на винде без wsl может работать и немного дольше 3сек и тесты будут падать.
 func RunPipeline(cmds ...cmd) {
-	var in1 chan interface{} = nil
-	var out1 chan interface{}
-	var out2 chan interface{}
-	// var out3 chan interface{}
-	// var out4 chan interface{}
-	// var out5 chan interface{}
 
 	wg := new(sync.WaitGroup)
-	wg.Add(1)
-	go func(c cmd, in, out chan interface{}) {
-		fmt.Println("go reader")
-		defer wg.Done()
-		c(in, out)
-		// Закрываем выходной канал после завершения команды
-		// if out != nil {
-		// 	close(out)
-		// }
-	}(cmds[1], out1, out2) // reader
 
-	time.Sleep(time.Second)
+	in := make(chan interface{})
+	ch := make([]chan interface{}, len(cmds))
 
-	wg.Add(1)
-	go func(c cmd, in, out chan interface{}) {
-		fmt.Println("go writer")
-		defer wg.Done()
-		c(in, out)
-		// Закрываем выходной канал после завершения команды
-		// if out != nil {
-		// 	close(out)
-		// }
-	}(cmds[0], in1, out1) // writer
+	for i, cmd := range cmds {
+		ch[i] = make(chan interface{})
+		switch i {
+		case 0:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				cmd(in, ch[i])
+				close(ch[i])
+			}()
+			continue
 
-	// wg.Add(1)
-	// go func() {
-	// 	defer wg.Done()
-	// 	cmds[2](out2, out3) // SelectMessages(outSelectUsers, outSelectMessages)
-	// }()
+		// case len(cmds):
+		// 	wg.Add(1)
+		// 	go func() {
+		// 		defer wg.Done()
+		// 		cmd(in, ch[i])
+		// 	}()
+		// 	continue
 
-	// wg.Add(1)
-	// go func() {
-	// 	defer wg.Done()
-	// 	cmds[3](out3, out4) // CheckSpam(outSelectMessages, outCheckSpam)
-	// }()
-
-	// wg.Add(1)
-	// go func() {
-	// 	defer wg.Done()
-	// 	cmds[4](out4, out5) // CombineResults(outCheckSpam, outCombineResults)
-	// }()
-
+		default:
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				cmd(ch[i-1], ch[i])
+				close(ch[i])
+			}()
+		}
+	}
 	wg.Wait()
-
-	// wg := new(sync.WaitGroup)
-	// var in chan interface{} = nil
-	// ch := make([]chan interface{}, len(cmds))
-	// for i, cmd := range cmds {
-	// 	ch[i] = make(chan interface{})
-	// 	switch i {
-	// 	case 0:
-	// 		wg.Add(1)
-	// 		go func() {
-	// 			defer wg.Done()
-	// 			cmd(in, ch[i])
-	// 		}()
-	// 		continue
-
-	// 		// case len(cmds):
-	// 		// 	outN := make(chan interface{})
-	// 		// 	go cmd()
-	// 		// 	continue
-
-	// 	}
-	// 	wg.Add(1)
-	// 	go func() {
-	// 		defer wg.Done()
-	// 		cmd(ch[i-1], ch[i])
-	// 	}()
-	// }
 
 }
 
@@ -163,6 +121,7 @@ func SelectUsers(in, out chan interface{}) {
 	mu := new(sync.Mutex)
 
 	result := make(map[User]struct{})
+
 	for iVal := range in {
 		email, err := iString(iVal)
 		if err != nil {
@@ -174,25 +133,22 @@ func SelectUsers(in, out chan interface{}) {
 		go func() {
 			defer wg.Done()
 
-			u := GetUser(email)
+			u := GetUser(email) // 1s
 
 			// check unique user
-			if _, ok := result[u]; !ok {
-				mu.Lock()
-				result[u] = struct{}{}
-				mu.Unlock()
-				// put out only unique user
-				out <- u
+
+			mu.Lock()
+			_, ok := result[u]
+			if !ok {
+				result[u] = struct{}{} // save unique entry
+				out <- u               // put out only unique user
 			}
+			mu.Unlock()
 		}()
 
 	}
 
-	go func() {
-		wg.Wait()
-		close(out)
-		fmt.Println("SelectUsers.close(out)")
-	}()
+	wg.Wait()
 
 }
 
@@ -234,22 +190,15 @@ func SelectMessages(in, out chan interface{}) {
 	}
 
 	if len(users) > 0 {
-		// fmt.Println("send last batch", users)
 		wg.Add(1)
 		go batch(append([]User(nil), users...), out, wg) // copy users
 	}
 
-	go func() {
-		wg.Wait()
-		close(out)
-		fmt.Println("SelectMessages.close(out)")
-	}()
+	wg.Wait()
 
 }
 
 func sendBatch(u []User, o chan interface{}) {
-
-	// fmt.Println("send batch func", u)
 
 	msgIDs, err := GetMessages(u...)
 
@@ -257,9 +206,8 @@ func sendBatch(u []User, o chan interface{}) {
 		panic(err)
 	}
 
-	// result to out chan
 	for _, msgID := range msgIDs {
-		o <- msgID
+		o <- msgID // result to out chan
 	}
 }
 
@@ -347,8 +295,6 @@ func CombineResults(in, out chan interface{}) {
 
 	result := make([]MsgData, 0, 100)
 
-	// fmt.Println("CombineResults.read(in)...")
-
 	for iVal := range in {
 		msgData, err := iMsgData(iVal)
 		if err != nil {
@@ -374,24 +320,23 @@ func CombineResults(in, out chan interface{}) {
 
 	// fmt.Println("CombineResults.out.Slice...")
 
+	outSlice := make([]string, 0, len(result))
+
 	for _, msgData := range result {
 		// line := fmt.Sprintf("%5t %d\n", msgData.HasSpam, msgData.ID)
 		line := fmt.Sprintf("%5t %d", msgData.HasSpam, msgData.ID)
-		fmt.Println(line)
+		outSlice = append(outSlice, line)
+		fmt.Println("OUT:", line)
 		// wg.Add(1)
 		// go func(l string) {
-		// 	defer wg.Done()
-		// 	out <- l
-		// }(line)
+		// defer wg.Done()
+		// out <- line
+		//  }(line)
 	}
 
-	out = nil
-	// go func() {
-	// 	wg.Wait()
-	// 	close(out)
-	// 	fmt.Println("CombineResults.close(out)")
-	// }()
+	out <- outSlice
 
+	// wg.Wait()
 }
 
 func iString(i interface{}) (string, error) {
@@ -430,59 +375,59 @@ func iMsgData(i interface{}) (MsgData, error) {
 	}
 }
 
-func main() {
-	inputData := []string{
-		"harry.dubois@mail.ru",
-		"k.kitsuragi@mail.ru",
-		"d.vader@mail.ru",
-		"noname@mail.ru",
-		"e.musk@mail.ru",
-		"spiderman@mail.ru", // is an alias for peter.parker@mail.ru
-		"red_prince@mail.ru",
-		"tomasangelo@mail.ru",
-		"batman@mail.ru", // is an alias for bruce.wayne@mail.ru
-		"bruce.wayne@mail.ru",
-	}
+// func main() {
+// 	inputData := []string{
+// 		"harry.dubois@mail.ru",
+// 		"k.kitsuragi@mail.ru",
+// 		"d.vader@mail.ru",
+// 		"noname@mail.ru",
+// 		"e.musk@mail.ru",
+// 		"spiderman@mail.ru", // is an alias for peter.parker@mail.ru
+// 		"red_prince@mail.ru",
+// 		"tomasangelo@mail.ru",
+// 		"batman@mail.ru", // is an alias for bruce.wayne@mail.ru
+// 		"bruce.wayne@mail.ru",
+// 	}
 
-	timeStart := time.Now()
+// 	timeStart := time.Now()
 
-	inGenerator := make(chan interface{})
-	outGenerator := make(chan interface{})
+// 	inGenerator := make(chan interface{})
+// 	outGenerator := make(chan interface{})
 
-	wg := new(sync.WaitGroup)
+// 	wg := new(sync.WaitGroup)
 
-	wg.Add(1)
-	go func(cmd cmd, in, out chan interface{}) {
-		cmd(in, out)
-		defer wg.Done()
-	}(new2CatStrings(inputData, time.Second), inGenerator, outGenerator)
+// 	wg.Add(1)
+// 	go func(cmd cmd, in, out chan interface{}) {
+// 		cmd(in, out)
+// 		defer wg.Done()
+// 	}(new2CatStrings(inputData, time.Second), inGenerator, outGenerator)
 
-	go func() {
-		wg.Wait()
-		fmt.Println("stop generator: new2CatStrings.close(out)")
-		close(outGenerator)
-	}()
+// 	go func() {
+// 		wg.Wait()
+// 		fmt.Println("stop generator: new2CatStrings.close(out)")
+// 		close(outGenerator)
+// 	}()
 
-	outSelectUsers := make(chan interface{})
-	go SelectUsers(outGenerator, outSelectUsers)
-	// readCh(outSelectUsers, 0)
+// 	outSelectUsers := make(chan interface{})
+// 	go SelectUsers(outGenerator, outSelectUsers)
+// 	// readCh(outSelectUsers, 0)
 
-	outSelectMessages := make(chan interface{})
-	go SelectMessages(outSelectUsers, outSelectMessages)
-	// readCh(outSelectMessages, 0)
+// 	outSelectMessages := make(chan interface{})
+// 	go SelectMessages(outSelectUsers, outSelectMessages)
+// 	// readCh(outSelectMessages, 0)
 
-	outCheckSpam := make(chan interface{})
-	go CheckSpam(outSelectMessages, outCheckSpam)
-	// readCh(outCheckSpam, 0)
+// 	outCheckSpam := make(chan interface{})
+// 	go CheckSpam(outSelectMessages, outCheckSpam)
+// 	// readCh(outCheckSpam, 0)
 
-	outCombineResults := make(chan interface{})
-	CombineResults(outCheckSpam, outCombineResults)
-	// readCh(outCombineResults, 0)
+// 	outCombineResults := make(chan interface{})
+// 	CombineResults(outCheckSpam, outCombineResults)
+// 	// readCh(outCombineResults, 0)
 
-	timeEnd := time.Since(timeStart)
-	fmt.Println(timeEnd)
+// 	timeEnd := time.Since(timeStart)
+// 	fmt.Println(timeEnd)
 
-}
+// }
 
 // func readCh(in chan interface{}, delayMillisecond int) {
 // 	fmt.Println("\t***** read ch started *****")
