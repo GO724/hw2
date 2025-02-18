@@ -67,34 +67,101 @@ import (
 //     что абсолютно верный код при запуске на винде без wsl может работать и немного дольше 3сек и тесты будут падать.
 func RunPipeline(cmds ...cmd) {
 
+	// v1: ch array: ok
+
+	// wg := new(sync.WaitGroup)
+
+	// var in chan interface{}
+	// out := make([]chan interface{}, len(cmds))
+
+	// for i, cmd := range cmds {
+	// 	out[i] = make(chan interface{})
+	// 	wg.Add(1)
+	// 	go func() {
+	// 		defer wg.Done()
+
+	// 		if i == 0 {
+	// 			in = make(chan interface{})
+	// 		} else {
+	// 			in = out[i-1]
+	// 		}
+
+	// 		cmd(in, out[i])
+
+	// 		close(out[i])
+	// 	}()
+	// }
+	// wg.Wait()
+
+	// v2: swap ch: not work
+
+	// var in chan interface{}
+	// var out chan interface{}
+
+	// wg := new(sync.WaitGroup)
+
+	// for i, cmd := range cmds {
+	// 	wg.Add(1)
+
+	// 	go func() {
+	// 		defer wg.Done()
+	// 		out = make(chan interface{})
+
+	// 		if i == 0 {
+	// 			in = make(chan interface{})
+	// 		} else {
+	// 			in = out
+	// 			out = make(chan interface{})
+	// 		}
+	// 		cmd(in, out)
+	// 		close(out)
+
+	// 	}()
+	// }
+	// wg.Wait()
+
+	// v3: separate ch: ok
+	var in chan interface{}
+	var out0 chan interface{}
+	var out1 chan interface{}
+	var out2 chan interface{}
+	var out3 chan interface{}
+	var out4 chan interface{}
+
 	wg := new(sync.WaitGroup)
 
-	in := make(chan interface{})
-	ch := make([]chan interface{}, len(cmds))
-
 	for i, cmd := range cmds {
-		ch[i] = make(chan interface{})
-		switch i {
-		case 0:
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				cmd(in, ch[i])
-				close(ch[i])
-			}()
-			continue
+		wg.Add(1)
 
-		default:
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				cmd(ch[i-1], ch[i])
-				close(ch[i])
-			}()
-		}
+		go func() {
+			defer wg.Done()
+			switch i {
+			case 0:
+				in = make(chan interface{})
+				out0 = make(chan interface{})
+				cmd(in, out0)
+				close(out0)
+			case 1:
+				out1 = make(chan interface{})
+				cmd(out0, out1)
+				close(out1)
+			case 2:
+				out2 = make(chan interface{})
+				cmd(out1, out2)
+				close(out2)
+			case 3:
+				out3 = make(chan interface{})
+				cmd(out2, out3)
+				close(out3)
+			case 4:
+				out4 = make(chan interface{})
+				cmd(out3, out4)
+				close(out4)
+			}
+
+		}()
 	}
 	wg.Wait()
-
 }
 
 // SelectUsers(SelectUsers(in, out chan interface{}))
