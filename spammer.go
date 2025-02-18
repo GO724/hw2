@@ -2,9 +2,13 @@ package main
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"sync"
 )
+
+const GET_MESSAGES_BATCH_SIZE int = 2
+const CHECK_SPAM_PARALLEL_LIMIT int = 5
 
 // task:
 
@@ -69,29 +73,29 @@ func RunPipeline(cmds ...cmd) {
 
 	// v1: ch array: ok
 
-	// wg := new(sync.WaitGroup)
+	wg := new(sync.WaitGroup)
 
-	// var in chan interface{}
-	// out := make([]chan interface{}, len(cmds))
+	var in chan interface{}
+	out := make([]chan interface{}, len(cmds))
 
-	// for i, cmd := range cmds {
-	// 	out[i] = make(chan interface{})
-	// 	wg.Add(1)
-	// 	go func() {
-	// 		defer wg.Done()
+	for i, cmd := range cmds {
+		out[i] = make(chan interface{})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
 
-	// 		if i == 0 {
-	// 			in = make(chan interface{})
-	// 		} else {
-	// 			in = out[i-1]
-	// 		}
+			if i == 0 {
+				in = make(chan interface{})
+			} else {
+				in = out[i-1]
+			}
 
-	// 		cmd(in, out[i])
+			cmd(in, out[i])
 
-	// 		close(out[i])
-	// 	}()
-	// }
-	// wg.Wait()
+			close(out[i])
+		}()
+	}
+	wg.Wait()
 
 	// v2: swap ch: not work
 
@@ -103,65 +107,23 @@ func RunPipeline(cmds ...cmd) {
 	// for i, cmd := range cmds {
 	// 	wg.Add(1)
 
+	// 	if i == 0 {
+	// 		in = make(chan interface{})
+	// 	} else {
+	// 		in = out
+	// 	}
+
+	// 	out = make(chan interface{})
+
 	// 	go func() {
 	// 		defer wg.Done()
-	// 		out = make(chan interface{})
 
-	// 		if i == 0 {
-	// 			in = make(chan interface{})
-	// 		} else {
-	// 			in = out
-	// 			out = make(chan interface{})
-	// 		}
 	// 		cmd(in, out)
 	// 		close(out)
 
 	// 	}()
 	// }
 	// wg.Wait()
-
-	// v3: separate ch: ok
-	var in chan interface{}
-	var out0 chan interface{}
-	var out1 chan interface{}
-	var out2 chan interface{}
-	var out3 chan interface{}
-	var out4 chan interface{}
-
-	wg := new(sync.WaitGroup)
-
-	for i, cmd := range cmds {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-			switch i {
-			case 0:
-				in = make(chan interface{})
-				out0 = make(chan interface{})
-				cmd(in, out0)
-				close(out0)
-			case 1:
-				out1 = make(chan interface{})
-				cmd(out0, out1)
-				close(out1)
-			case 2:
-				out2 = make(chan interface{})
-				cmd(out1, out2)
-				close(out2)
-			case 3:
-				out3 = make(chan interface{})
-				cmd(out2, out3)
-				close(out3)
-			case 4:
-				out4 = make(chan interface{})
-				cmd(out3, out4)
-				close(out4)
-			}
-
-		}()
-	}
-	wg.Wait()
 }
 
 // SelectUsers(SelectUsers(in, out chan interface{}))
@@ -180,10 +142,10 @@ func SelectUsers(in, out chan interface{}) {
 
 	result := make(map[User]struct{})
 
-	for iVal := range in {
-		email, err := iString(iVal)
-		if err != nil {
-			fmt.Println(err)
+	for v := range in {
+		email, ok := v.(string)
+		if !ok {
+			fmt.Println("SelectUsers: can't get email from chan interface{}")
 			continue
 		}
 
@@ -224,26 +186,25 @@ func SelectMessages(in, out chan interface{}) {
 	// 	out - MsgID
 
 	wg := new(sync.WaitGroup)
-	users := make([]User, 0, 2)
+	users := make([]User, 0, GET_MESSAGES_BATCH_SIZE)
 	batch := func(u []User, o chan interface{}, wgb *sync.WaitGroup) {
 		defer wgb.Done()
 		sendBatch(u, o)
 	}
 
-	for iVal := range in {
-		user, err := iUser(iVal)
-		if err != nil {
-			fmt.Println(err)
-			continue
+	for v := range in {
+		user, ok := v.(User)
+		if !ok {
+			panic("SelectMessages: unexpected type in interface{} chan (expected User)")
 		}
 
 		users = append(users, user) // make batch
 
-		if len(users) == 2 {
+		if len(users) == GET_MESSAGES_BATCH_SIZE {
 			// fmt.Println("send full batch", users)
 			wg.Add(1)
 			go batch(append([]User(nil), users...), out, wg) // copy users
-			users = users[0:0:2]                             // reset batch
+			users = users[0:0:GET_MESSAGES_BATCH_SIZE]       // reset batch
 		}
 	}
 
@@ -277,59 +238,115 @@ func sendBatch(u []User, o chan interface{}) {
 //     один запрос выполняется за 100мс.
 //     и у этого сервиса есть "антибрут" - его нельзя вызывать бесконтрольно в кучу потоков.
 //     если сделать к нему более 5 параллельных запросов, то он начнет возвращать ошибку и данные о наличии спама вы не получите.
+
+// func CheckSpam(in, out chan interface{}) {
+// 	// in - MsgID
+// 	// out - MsgData
+
+// 	fmt.Println("CheckSpam(start):Текущее количество горутин:", runtime.NumGoroutine())
+
+// 	wg := new(sync.WaitGroup)
+
+// 	sem := NewSemaphore(CHECK_SPAM_PARALLEL_LIMIT)
+
+// 	for v := range in {
+// 		msgID, ok := v.(MsgID)
+// 		if !ok {
+// 			panic("CheckSpam: unexpected type in interface{} chan (expected MsgID)")
+// 		}
+
+// 		sem.Acquire() // limit 5 parallel
+// 		wg.Add(1)
+// 		go func(msgID MsgID) {
+// 			defer wg.Done()
+// 			defer sem.Release()
+// 			isSpam, err := HasSpam(msgID)
+// 			if err != nil {
+// 				fmt.Printf("**********ANTIBRUT**********%s**********ANTIBRUT**********\n", err)
+// 			}
+// 			out <- MsgData{
+// 				ID:      msgID,
+// 				HasSpam: isSpam,
+// 			}
+
+// 		}(msgID)
+
+// 	}
+
+// 	wg.Wait()
+// 	fmt.Println("CheckSpam(stop):Текущее количество горутин:", runtime.NumGoroutine())
+
+// }
+
+// type Semaphore struct {
+// 	C chan struct{}
+// }
+
+// func NewSemaphore(limit int) *Semaphore {
+// 	return &Semaphore{
+// 		C: make(chan struct{}, limit),
+// 	}
+// }
+
+// func (s *Semaphore) Acquire() {
+// 	s.C <- struct{}{}
+// 	fmt.Println("Semaphore.Asquire():Текущее количество горутин:", runtime.NumGoroutine())
+// }
+
+// // release lock
+// func (s *Semaphore) Release() {
+// 	<-s.C
+// 	fmt.Println("Semaphore.Release():Текущее количество горутин:", runtime.NumGoroutine())
+// }
+
 func CheckSpam(in, out chan interface{}) {
 	// in - MsgID
 	// out - MsgData
 
-	wg := new(sync.WaitGroup)
+	fmt.Println("CheckSpam(start):Текущее количество горутин:", runtime.NumGoroutine())
 
-	sem := NewSemaphore(5)
+	jobs := make(chan MsgID, CHECK_SPAM_PARALLEL_LIMIT)
 
-	for iVal := range in {
-		// limit 5 parallel
-		msgID, err := iMsgID(iVal)
-		if err != nil {
-			panic(err)
+	go func() { // start jobs (read msgID from <in>)
+		for v := range in {
+			msgID, ok := v.(MsgID)
+			if !ok {
+				panic("CheckSpam: unexpected type in interface{} chan (expected MsgID)")
+			}
+
+			jobs <- msgID // send next value in jobs channel to process it in worker pool
 		}
+		close(jobs)
+	}()
+
+	wg := &sync.WaitGroup{}
+
+	// create worker pool : start <CHECK_SPAM_PARALLEL_LIMIT> sleeping goroutines
+	for i := 1; i <= CHECK_SPAM_PARALLEL_LIMIT; i++ {
+		// fmt.Printf("CheckSpam(loop):Start %d worker. Текущее количество горутин: %d\n", i, runtime.NumGoroutine())
 		wg.Add(1)
-		go func(msgID MsgID) {
-			sem.Acquire()
+		go func(jobs chan MsgID, o chan interface{}) {
 			defer wg.Done()
-			defer sem.Release()
-			isSpam, err := HasSpam(msgID)
-			if err != nil {
-				fmt.Printf("**********ANTIBRUT**********%s**********ANTIBRUT**********\n", err)
-			}
-			out <- MsgData{
-				ID:      msgID,
-				HasSpam: isSpam,
+			for msgID := range jobs { // parallel read jobs chan in each worker
+				isSpam, err := HasSpam(msgID)
+				if err != nil {
+					fmt.Printf("**********ANTIBRUT**********%s**********ANTIBRUT**********\n", err)
+				}
+
+				out <- MsgData{
+					ID:      msgID,
+					HasSpam: isSpam,
+				}
 			}
 
-		}(msgID)
-
+		}(jobs, out)
 	}
 
+	// fmt.Printf("********************* wgWait(%d)\n", runtime.NumGoroutine())
 	wg.Wait()
 
-}
+	// fmt.Println("CheckSpam(stop):wgWait(done). Текущее количество горутин:", runtime.NumGoroutine())
 
-type Semaphore struct {
-	C chan struct{}
-}
-
-func NewSemaphore(limit int) *Semaphore {
-	return &Semaphore{
-		C: make(chan struct{}, limit),
-	}
-}
-
-func (s *Semaphore) Acquire() {
-	s.C <- struct{}{}
-}
-
-// release lock
-func (s *Semaphore) Release() {
-	<-s.C
 }
 
 // CombineResults(CombineResults(in, out chan interface{}))
@@ -347,65 +364,49 @@ func CombineResults(in, out chan interface{}) {
 	// in - MsgData
 	// out - string
 
-	result := make([]MsgData, 0, 100)
+	resultTrue := make([]MsgData, 0, 100)
+	resultFalse := make([]MsgData, 0, 100)
 
-	for iVal := range in {
-		msgData, err := iMsgData(iVal)
-		if err != nil {
-			panic(err)
+	for v := range in {
+		msgData, ok := v.(MsgData)
+		if !ok {
+			panic("CombineResult: unexpected type in interface{} chan (expected MsgData)")
 		}
 
-		result = append(result, msgData)
+		if msgData.HasSpam {
+			resultTrue = append(resultTrue, msgData)
+		} else {
+			resultFalse = append(resultFalse, msgData)
+		}
 	}
 
-	// fmt.Println("CombineResults.sort.Slice...")
-
-	sort.Slice(result, func(i, j int) bool {
-		a, b := result[i], result[j]
-		if a.HasSpam != b.HasSpam {
-			return a.HasSpam && !b.HasSpam
-		}
-		return a.ID < b.ID
+	sort.Slice(resultTrue, func(i, j int) bool {
+		return resultTrue[i].ID < resultTrue[j].ID
 	})
 
-	for _, msgData := range result {
+	for _, msgData := range resultTrue {
 		out <- fmt.Sprintf("%t %d", msgData.HasSpam, msgData.ID)
 	}
 
-}
+	sort.Slice(resultFalse, func(i, j int) bool {
+		return resultFalse[i].ID < resultFalse[j].ID
+	})
 
-func iString(i interface{}) (string, error) {
-	switch v := i.(type) {
-	case string:
-		return v, nil
-	default:
-		return "", fmt.Errorf("неожиданный тип: %T", v)
+	for _, msgData := range resultFalse {
+		out <- fmt.Sprintf("%t %d", msgData.HasSpam, msgData.ID)
 	}
-}
 
-func iUser(i interface{}) (User, error) {
-	switch v := i.(type) {
-	case User:
-		return v, nil
-	default:
-		return User{}, fmt.Errorf("неожиданный тип: %T", v)
-	}
-}
+	// fmt.Println("CombineResults.sort.Slice...")
+	// sort.Slice(result, func(i, j int) bool {
+	// 	a, b := result[i], result[j]
+	// 	if a.HasSpam != b.HasSpam {
+	// 		return a.HasSpam && !b.HasSpam
+	// 	}
+	// 	return a.ID < b.ID
+	// })
 
-func iMsgID(i interface{}) (MsgID, error) {
-	switch v := i.(type) {
-	case MsgID:
-		return v, nil
-	default:
-		return 0, fmt.Errorf("неожиданный тип: %T", v)
-	}
-}
+	// for _, msgData := range result {
+	// 	out <- fmt.Sprintf("%t %d", msgData.HasSpam, msgData.ID)
+	// }
 
-func iMsgData(i interface{}) (MsgData, error) {
-	switch v := i.(type) {
-	case MsgData:
-		return v, nil
-	default:
-		return MsgData{}, fmt.Errorf("неожиданный тип: %T", v)
-	}
 }
