@@ -325,7 +325,7 @@ func CheckSpam(in, out chan interface{}) {
 	for i := 1; i <= CHECK_SPAM_PARALLEL_LIMIT; i++ {
 		// fmt.Printf("CheckSpam(loop):Start %d worker. Текущее количество горутин: %d\n", i, runtime.NumGoroutine())
 		wg.Add(1)
-		go func(jobs chan MsgID, o chan interface{}) {
+		go func(jobs chan MsgID, o chan interface{}) { // worker
 			defer wg.Done()
 			for msgID := range jobs { // parallel read jobs chan in each worker
 				isSpam, err := HasSpam(msgID)
